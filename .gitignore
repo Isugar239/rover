@@ -6,6 +6,5 @@ __pycache__/
 models/sdxl-base/
 
 # Сгенерированные артефакты
-*.png
-refs/
+
 trigger.wav
