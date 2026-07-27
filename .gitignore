@@ -1,1 +1,11 @@
 data
+__pycache__/
+*.py[cod]
+
+# SDXL веса — скачиваются через download_sdxl.sh
+models/sdxl-base/
+
+# Сгенерированные артефакты
+*.png
+refs/
+trigger.wav

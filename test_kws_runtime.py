@@ -33,17 +33,20 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Real-time KWS test script.")
     parser.add_argument("--model", default="models/kws_cnn.pt")
     parser.add_argument("--threshold", type=float, default=0.9)
+    parser.add_argument("--threshold-four", type=float, default=None)
+    parser.add_argument("--threshold-five", type=float, default=None)
     parser.add_argument("--margin", type=float, default=0.25)
     parser.add_argument("--top2-margin", type=float, default=0.15)
     parser.add_argument("--avg", type=int, default=4)
-    parser.add_argument("--calib-sec", type=float, default=1.0)
-    parser.add_argument("--rms-mult", type=float, default=1.6)
     parser.add_argument("--device", type=int, default=None)
     parser.add_argument("--list-devices", action="store_true")
     parser.add_argument("--consec-hits", type=int, default=2)
     parser.add_argument("--sample-rate", type=int, default=None)
     parser.add_argument("--blocksize", type=int, default=0)
     parser.add_argument("--latency", default="high")
+    parser.add_argument("--log-probs", action="store_true")
+    parser.add_argument("--save-trigger", default="trigger.wav")
+    parser.add_argument("--min-rms", type=float, default=0.005)
     parser.add_argument("--buffer-sec", type=float, default=1.0)
     parser.add_argument("--hop-sec", type=float, default=0.25)
     args = parser.parse_args()
@@ -91,9 +94,6 @@ def main() -> None:
         "background": deque(maxlen=args.avg),
     }
     pending_samples = 0
-    noise_rms: Optional[float] = None
-    calib_samples = int(device_sample_rate * args.calib_sec)
-    calib_buffer: Deque[float] = deque(maxlen=calib_samples)
 
     def audio_callback(indata: np.ndarray, frames: int, time_info, status) -> None:
         if status:
@@ -101,15 +101,7 @@ def main() -> None:
         if locked.is_set():
             return
         nonlocal pending_samples
-        nonlocal noise_rms
         mono = indata[:, 0].astype(np.float32)
-        if noise_rms is None:
-            calib_buffer.extend(mono.tolist())
-            if len(calib_buffer) >= calib_samples:
-                data = np.array(calib_buffer, dtype=np.float32)
-                noise_rms = float(np.sqrt(np.mean(data ** 2)) + 1e-8)
-                print(f"калибровка шума: rms={noise_rms:.6f}")
-            return
         audio_buffer.extend(mono.tolist())
         pending_samples += frames
         while len(audio_buffer) == buffer_len and pending_samples >= hop_len:
@@ -125,16 +117,18 @@ def main() -> None:
                 continue
             if locked.is_set():
                 continue
+            rms = float(np.sqrt(np.mean(chunk ** 2)) + 1e-8)
+            if rms < args.min_rms:
+                hits["four"] = 0
+                hits["five"] = 0
+                if args.log_probs:
+                    print(f"rms: {rms:.6f} < min_rms={args.min_rms:.6f} -> skip")
+                continue
             waveform = torch.tensor(chunk).unsqueeze(0).to(device)
             if device_sample_rate != model_sample_rate:
                 waveform = torchaudio.functional.resample(
                     waveform, device_sample_rate, model_sample_rate
                 )
-            rms = float(np.sqrt(np.mean(chunk ** 2)) + 1e-8)
-            if noise_rms is not None and rms < noise_rms * args.rms_mult:
-                hits["four"] = 0
-                hits["five"] = 0
-                continue
             with torch.no_grad():
                 features = mfcc(waveform).unsqueeze(1)
                 logits = model(features)
@@ -144,6 +138,9 @@ def main() -> None:
             best_prob = float(probs[best_idx])
             sorted_probs = sorted([float(p) for p in probs], reverse=True)
             second_prob = sorted_probs[1] if len(sorted_probs) > 1 else 0.0
+            if args.log_probs:
+                parts = [f"{label}:{float(prob):.3f}" for label, prob in zip(labels, probs)]
+                print(f"probs: {' '.join(parts)} | rms={rms:.6f}")
 
             for label, prob in zip(labels, probs):
                 if label in prob_history:
@@ -157,8 +154,14 @@ def main() -> None:
 
             if best_label in hits:
                 avg_prob = float(np.mean(prob_history[best_label])) if prob_history[best_label] else 0.0
+                if best_label == "four" and args.threshold_four is not None:
+                    thr = args.threshold_four
+                elif best_label == "five" and args.threshold_five is not None:
+                    thr = args.threshold_five
+                else:
+                    thr = args.threshold
                 confident = (
-                    avg_prob >= args.threshold
+                    avg_prob >= thr
                     and (avg_prob - background_prob) >= args.margin
                     and (avg_prob - second_prob) >= args.top2_margin
                 )
@@ -170,6 +173,12 @@ def main() -> None:
                 if hits[best_label] >= args.consec_hits:
                     locked.set()
                     seconds = label_to_timer.get(best_label, 4)
+                    try:
+                        wave = torch.tensor(chunk).unsqueeze(0)
+                        torchaudio.save(args.save_trigger, wave, device_sample_rate)
+                        print(f"сохранил триггер в {args.save_trigger}")
+                    except Exception as exc:
+                        print(f"не удалось сохранить триггер: {exc}")
                     print(f"детект: {best_label} ({avg_prob:.3f}), таймер {seconds} сек")
                     start_countdown(seconds)
                     stop_event.set()

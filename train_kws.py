@@ -25,9 +25,10 @@ def train(
     batch_size: int,
     lr: float,
     device: torch.device,
+    silence_ratio: float,
 ) -> None:
-    train_dataset = KWSDataset(root=data_root, subset="training")
-    val_dataset = KWSDataset(root=data_root, subset="validation")
+    train_dataset = KWSDataset(root=data_root, subset="training", silence_ratio=silence_ratio)
+    val_dataset = KWSDataset(root=data_root, subset="validation", silence_ratio=0.0)
 
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=2)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=2)
@@ -117,6 +118,7 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--seed", type=int, default=1337)
+    parser.add_argument("--silence-ratio", type=float, default=0.5)
     args = parser.parse_args()
 
     set_seed(args.seed)
@@ -129,6 +131,7 @@ def main() -> None:
         batch_size=args.batch_size,
         lr=args.lr,
         device=device,
+        silence_ratio=args.silence_ratio,
     )
 
 

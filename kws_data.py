@@ -1,6 +1,6 @@
 import os
 import random
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import torch
 import torchaudio
@@ -45,6 +45,7 @@ class KWSDataset(Dataset):
         subset: str,
         sample_rate: int = 16000,
         background_ratio: float = 1.0,
+        silence_ratio: float = 0.0,
         seed: int = 1337,
     ):
         super().__init__()
@@ -52,13 +53,14 @@ class KWSDataset(Dataset):
         self.sample_rate = sample_rate
         self.speech = SubsetSpeechCommands(subset=subset, root=root)
 
-        self.examples: List[Tuple[str, str, int]] = []
+        self.examples: List[Tuple[Optional[str], str, int]] = []
         for path in self.speech._walker:
             label = os.path.basename(os.path.dirname(path))
             if label in ("four", "five"):
                 self.examples.append((path, label, -1))
 
         self.background_samples = self._build_background_samples(background_ratio)
+        self.silence_samples = self._build_silence_samples(silence_ratio)
 
     def _build_background_samples(self, background_ratio: float) -> List[Tuple[str, str, int]]:
         background_dir = os.path.join(self.speech._path, "_background_noise_")
@@ -80,8 +82,14 @@ class KWSDataset(Dataset):
             samples.append((noise_path, "background", -1))
         return samples
 
+    def _build_silence_samples(self, silence_ratio: float) -> List[Tuple[Optional[str], str, int]]:
+        if silence_ratio <= 0:
+            return []
+        target_count = int(len(self.examples) * silence_ratio / 2)
+        return [(None, "background", -1) for _ in range(max(target_count, 1))]
+
     def __len__(self) -> int:
-        return len(self.examples) + len(self.background_samples)
+        return len(self.examples) + len(self.background_samples) + len(self.silence_samples)
 
     def _load_audio(self, path: str) -> torch.Tensor:
         waveform, sr = torchaudio.load(path)
@@ -104,8 +112,11 @@ class KWSDataset(Dataset):
         if idx < len(self.examples):
             path, label, _ = self.examples[idx]
             waveform = self._load_audio(path)
-        else:
+        elif idx < len(self.examples) + len(self.background_samples):
             path, label, _ = self.background_samples[idx - len(self.examples)]
             waveform = self._load_audio(path)
+        else:
+            _, label, _ = self.silence_samples[idx - len(self.examples) - len(self.background_samples)]
+            waveform = torch.zeros(1, self.sample_rate)
         waveform = self._crop_or_pad(waveform)
         return waveform, LABEL_TO_INDEX[label]
