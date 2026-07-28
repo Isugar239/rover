@@ -55,7 +55,7 @@ def is_sdxl(model_id: str) -> bool:
 # Ядро внешности персонажа — не меняется, держит образ Шапокляк.
 CHARACTER_PROMPT = (
     "solo single old lady Shapoklyak, one character alone, centered, "
-    "old Soviet stop-motion felt puppet, big long nose, grey hair bun, "
+    "big long nose, grey hair bun, "
     "flat-brim black straw hat, white lace collar, dark high-collar coat, "
     "mischievous smile"
 )
