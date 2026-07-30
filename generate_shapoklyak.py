@@ -31,12 +31,13 @@ from PIL import Image, ImageDraw, ImageFont
 
 FONT_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 
-# Модель по умолчанию — локально скачанный SDXL base (см. download_sdxl.sh).
-# Если локальной папки нет — откатываемся на онлайн-идентификатор SDXL.
-# Для SD1.5 можно передать --model stable-diffusion-v1-5/stable-diffusion-v1-5
-_LOCAL_SDXL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "sdxl-base")
-DEFAULT_MODEL = _LOCAL_SDXL if os.path.isdir(_LOCAL_SDXL) else "stabilityai/stable-diffusion-xl-base-1.0"
+# По умолчанию — SD1.5 (быстрее и легче по VRAM). Для SDXL:
+#   --model models/sdxl-base   или   --model stabilityai/stable-diffusion-xl-base-1.0
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_LOCAL_SDXL = os.path.join(_SCRIPT_DIR, "models", "sdxl-base")
+OUT_DIR = os.path.join(_SCRIPT_DIR, "итог")
 SD15_MODEL = "stable-diffusion-v1-5/stable-diffusion-v1-5"
+DEFAULT_MODEL = SD15_MODEL
 
 # IP-Adapter (репозиторий один, веса/подпапка зависят от модели).
 IP_ADAPTER_REPO = "h94/IP-Adapter"
@@ -52,12 +53,14 @@ def is_sdxl(model_id: str) -> bool:
     """Грубое определение SDXL по идентификатору модели."""
     return "xl" in model_id.lower()
 
-# Ядро внешности персонажа — не меняется, держит образ Шапокляк.
+# Ядро внешности — кукольная советская Шапокляк (как в refs/), не flat 2D.
 CHARACTER_PROMPT = (
-    "solo single old lady Shapoklyak, one character alone, centered, "
-    "big long nose, grey hair bun, "
-    "flat-brim black straw hat, white lace collar, dark high-collar coat, "
-    "mischievous smile"
+    "Starukha Shapoklyak, old lady soviet stop-motion puppet, "
+    "black flat-top chapeau claque top hat with hatpin, "
+    "very long pointed curved nose, large round dark eyes, rosy cheeks, "
+    "grey hair under hat, black dress, big white lace jabot collar and lace cuffs, "
+    "mischievous sly smile, thin elderly woman, "
+    "soviet puppet animation style, tactile fabric texture, miniature set"
 )
 
 # Вариативная праздничная сцена — выбирается случайно, чтобы каждый прогон
@@ -82,6 +85,8 @@ DEFAULT_GREETING = "Happy Birthday"
 DEFAULT_PROMPT = f"{CHARACTER_PROMPT}, {SCENE_VARIATIONS[0]}, warm cozy lighting, highly detailed"
 
 NEGATIVE_PROMPT = (
+    "2d, flat illustration, vector art, anime, comic, painting, "
+    "santa claus, man, male, boy, fat, chubby, beard, red suit, "
     "two people, multiple characters, crowd, duplicate, twins, second person, "
     "lowres, blurry, deformed, disfigured, ugly, extra limbs, extra fingers, "
     "bad anatomy, watermark, text, signature, jpeg artifacts, cropped"
@@ -281,7 +286,11 @@ def main():
     text = args.text if args.text is not None else DEFAULT_GREETING
     prompt = args.prompt if args.prompt is not None else build_random_prompt()
     seed = args.seed if args.seed is not None else random.randint(0, 2**32 - 1)
-    output = args.output if args.output is not None else f"shapoklyak_birthday_{seed}.png"
+    if args.output is not None:
+        output = args.output
+    else:
+        os.makedirs(OUT_DIR, exist_ok=True)
+        output = os.path.join(OUT_DIR, f"shapoklyak_birthday_{seed}.png")
 
     print(f"[*] Текст: {text!r}")
     print(f"[*] Сид: {seed} (для повтора: --seed {seed})")
@@ -295,8 +304,8 @@ def main():
     if use_ip_adapter:
         pipe.set_ip_adapter_scale(args.ip_scale)
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    generator = torch.Generator(device=device).manual_seed(seed)
+    # При cpu offload генератор надёжнее на CPU (иначе CUDA device mismatch).
+    generator = torch.Generator(device="cpu").manual_seed(seed)
 
     call_kwargs = dict(
         prompt=prompt,

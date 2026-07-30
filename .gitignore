@@ -1,10 +1,28 @@
 data
 __pycache__/
 *.py[cod]
+*.wav
 
-# SDXL веса — скачиваются через download_sdxl.sh
+# SDXL / FLUX / LCM веса — скачиваются отдельно
 models/sdxl-base/
+models/flux-schnell/
+models/lcm-lora-sd15/
+models/flux_copy.log
 
-# Сгенерированные артефакты
+# Датасет / LoRA / результаты генерации
+dataset/
+shapoklyak_lora/
+итог/
+.numba_cache/
+assets/poses/*_preview.jpg
 
-trigger.wav
+# Битые / сырые рефы (не для сцены)
+assets/poses/waist_up_cake.png
+assets/poses/classic_ref.png
+
+# Локальные тяжёлые артефакты
+*.safetensors
+*.ckpt
+*.bin
+*.pt
+!models/kws_*.pt

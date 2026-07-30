@@ -1,0 +1,25 @@
+{
+  "version": 4,
+  "poses": [
+    {
+      "id": "left_look_right",
+      "file": "left_look_right.png",
+      "look": "right",
+      "slot": "left",
+      "scale": 0.8,
+      "y_bias": 0.99,
+      "light": "left",
+      "notes": "Профиль вправо — торт справа"
+    },
+    {
+      "id": "front_gesture",
+      "file": "front_gesture.png",
+      "look": "front",
+      "slot": "left",
+      "scale": 0.84,
+      "y_bias": 1.0,
+      "light": "right",
+      "notes": "Жест рукой"
+    }
+  ]
+}
