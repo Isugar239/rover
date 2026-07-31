@@ -262,7 +262,7 @@ def draw_greeting(image: Image.Image, text: str = "Happy Birthday!") -> Image.Im
     pad_x, pad_y = int(font_size * 0.42), int(font_size * 0.26)
 
     overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
-    od = ImageDraw.Draw(overlay)
+    od = ImageDraw.Draw(overlay)  
     rect = [
         x + bbox[0] - pad_x,
         y + bbox[1] - pad_y,
@@ -283,26 +283,42 @@ def draw_greeting(image: Image.Image, text: str = "Happy Birthday!") -> Image.Im
     return img.convert("RGB")
 
 
-# Только фон: торт + праздник. Без puppet/felt/lamp — иначе модель рисует кукол и лампы.
+# Комната + торт на столе справа (один проход). Короткие промпты — CLIP 77.
 SCENE_PROMPT_VARIANTS = {
     "cake": [
-        "pink birthday cake with lit candles on wooden table right, red curtains, colorful balloons, confetti, warm party room, empty left side, no people",
-        "frosted birthday cake candles on right, streamers balloons gift wrap, velvet curtains, festive warm light, clear left, no people",
-        "two tier birthday cake with candles right, paper garlands balloons, checkered tablecloth, bright party room, empty left, no people",
-        "chocolate birthday cake lit candles right, hanging balloons confetti, wood table red drapes, festive atmosphere, clear left, no people",
-        "white cream birthday cake candles right, burgundy curtains balloons, party decorations wood floor, empty left side, no people",
+        "pink birthday cake lit candles on wood table right, cozy room red curtains window balloons, empty left, no people",
+        "white cream birthday cake lit candles on table right, home room wallpaper drapes balloons, empty left, no people",
+        "chocolate birthday cake lit candles on table right, kitchen window chairs balloons, clear left, no people",
+        "yellow birthday cake lit candles on table right, apartment curtains balloons, empty left, no people",
+        "vanilla birthday cake lit candles on rustic table right, cottage lace curtains window, clear left, no people",
     ],
     "party": [
-        "birthday cake snacks on right table, paper bunting balloons streamers, warm festive room, empty left, no people",
-        "cake cookies punch bowl right, colorful flags confetti wallpaper, party lights glow, clear left, no people",
-        "presents and birthday cake right, hanging balloons streamers, festive warm room, empty left, no people",
+        "birthday cake lit candles on table right, festive room balloons bunting, empty left, no people",
+        "birthday cake lit candles gifts on table right, party flags balloons, clear left, no people",
+        "birthday cake lit candles on table right, decorated home streamers, empty left, no people",
     ],
     "family": [
-        "birthday cake on right table, lace curtains balloons, cozy festive room wood floor, empty left, no people",
-        "birthday cake near window right, floral wallpaper balloons, warm golden light, clear left, no people",
-        "layered cake candles gifts right, patterned wallpaper bunting balloons, festive evening, empty left, no people",
+        "birthday cake lit candles on wood table right, cozy room lace curtains balloons, empty left, no people",
+        "birthday cake lit candles on table by window right, dining room wallpaper, clear left, no people",
+        "birthday cake lit candles gifts on table right, evening apartment bunting, empty left, no people",
     ],
 }
+
+# Запасные промпты, если снова включим отдельную генерацию торта.
+CAKE_PROMPT_VARIANTS = [
+    "homemade two-tier birthday cake, buttercream frosting, five lit candles, white plate, gray background, photo",
+    "homemade pink two-tier birthday cake, buttercream, five lit candles, white plate, gray background, photo",
+    "homemade chocolate two-tier birthday cake, buttercream, five lit candles, white plate, gray background, photo",
+    "homemade vanilla two-tier birthday cake, buttercream, five lit candles, white plate, gray background, photo",
+    "homemade yellow two-tier birthday cake, buttercream, five lit candles, white plate, gray background, photo",
+]
+
+NEGATIVE_CAKE = (
+    "wedding cake, fondant, roses, plastic, melted, goo, horror, creepy, "
+    "face, blood, glowing, transparent, four tiers, lightbulbs, "
+    "person, room, furniture, text, blurry, multiple cakes, deformed"
+)
+
 
 
 @dataclass
@@ -317,12 +333,12 @@ class Framing:
 
 # Рабочий формат первым; остальные — вариации того же слота.
 FRAMINGS = [
-    Framing("cake_right", 0.45, 0.74, 1.00, ""),
-    Framing("cake_far_right", 0.48, 0.82, 0.95, ", cake farther right"),
-    Framing("wide_left", 0.52, 0.78, 0.88, ", wide empty left floor"),
-    Framing("close_left", 0.40, 0.70, 1.08, ", character space larger left"),
-    Framing("party_balloons", 0.45, 0.72, 1.00, ", many colorful balloons overhead"),
-    Framing("window_light", 0.46, 0.76, 1.00, ", soft window light from right"),
+    Framing("cake_right", 0.38, 0.72, 1.00, ""),
+    Framing("cake_far_right", 0.40, 0.80, 0.92, ", table farther right"),
+    Framing("wide_left", 0.44, 0.76, 0.88, ", wide empty left floor space"),
+    Framing("close_left", 0.36, 0.68, 1.05, ", closer view of table"),
+    Framing("party_balloons", 0.38, 0.70, 1.00, ", many balloons and garlands"),
+    Framing("window_light", 0.38, 0.74, 1.00, ", sunny window behind table"),
 ]
 
 
@@ -337,9 +353,155 @@ def pick_framing(
                 return f
         known = ", ".join(f.id for f in FRAMINGS)
         raise ValueError(f"неизвестный framing={framing_id!r}; доступны: {known}")
-    # чаще рабочий кадр cake_right (~43%)
-    weights = [6, 2, 2, 2, 2, 2]
+    # чаще комната+стол справа: cake_right / window_light
+    weights = [8, 1, 1, 1, 2, 5]
     return rng.choices(FRAMINGS, weights=weights, k=1)[0]
+
+
+def pick_cake_prompt(rng: random.Random | None = None) -> str:
+    rng = rng or random
+    return rng.choice(CAKE_PROMPT_VARIANTS)
+
+
+def make_cake_solo_layout(size: int, rng: random.Random | None = None) -> Image.Image:
+    """Чёткий макет торта на сером фоне — форма держится при img2img."""
+    rng = rng or random.Random(0)
+    # ровный серый — удобно вырезать и не путается с кремом
+    bg = (210, 212, 218)
+    canvas = Image.new("RGB", (size, size), bg)
+    draw = ImageDraw.Draw(canvas)
+    frost = rng.choice([
+        (255, 140, 165), (255, 200, 120), (240, 210, 180),
+        (255, 170, 190), (140, 85, 55), (255, 230, 140),
+    ])
+    frost2 = tuple(max(40, min(255, c - 20)) for c in frost)
+    cx, cy = size // 2, int(size * 0.68)
+    cw, ch = int(size * 0.30), int(size * 0.38)
+
+    # тарелка
+    draw.ellipse([cx - cw - 24, cy - 6, cx + cw + 24, cy + 32], fill=(250, 250, 252))
+    draw.ellipse([cx - cw - 14, cy + 2, cx + cw + 14, cy + 22], fill=(235, 235, 240))
+
+    # нижний ярус (цилиндр)
+    y1 = cy
+    h1 = int(ch * 0.48)
+    draw.rounded_rectangle([cx - cw, y1 - h1, cx + cw, y1], radius=8, fill=frost)
+    draw.ellipse([cx - cw, y1 - 14, cx + cw, y1 + 10], fill=tuple(min(255, c + 20) for c in frost))
+    for i in range(8):
+        bx = cx - cw + 8 + i * max(8, (2 * cw - 16) // 7)
+        draw.ellipse([bx - 4, y1 - 8, bx + 4, y1 + 4], fill=(255, 255, 255))
+
+    # верхний ярус
+    mw = int(cw * 0.70)
+    y2 = y1 - h1 + 4
+    h2 = int(ch * 0.36)
+    draw.rounded_rectangle([cx - mw, y2 - h2, cx + mw, y2], radius=7, fill=frost2)
+    draw.ellipse([cx - mw, y2 - 12, cx + mw, y2 + 8], fill=(255, 255, 255))
+    for i in range(6):
+        bx = cx - mw + 6 + i * max(8, (2 * mw - 12) // 5)
+        draw.ellipse([bx - 3, y2 - 6, bx + 3, y2 + 2], fill=(255, 255, 255))
+
+    top = y2 - h2
+    draw.ellipse([cx - mw + 4, top - 8, cx + mw - 4, top + 10], fill=(255, 255, 255))
+    draw.ellipse([cx - mw + 10, top - 2, cx + mw - 10, top + 8], fill=frost2)
+
+    # ровные свечи
+    for i in range(5):
+        bx = cx - mw + 14 + i * max(10, (2 * mw - 28) // 4)
+        draw.rectangle([bx - 2, top - 34, bx + 2, top + 2], fill=(255, 250, 230))
+        draw.ellipse([bx - 5, top - 46, bx + 5, top - 32], fill=(255, 140, 30))
+        draw.ellipse([bx - 3, top - 50, bx + 3, top - 38], fill=(255, 245, 130))
+
+    # почти без блюра — форма важнее
+    return canvas.filter(ImageFilter.GaussianBlur(radius=1.2))
+
+
+def cake_looks_ok(img: Image.Image) -> bool:
+    """Отсечь светящиеся/пустые/страшные торты."""
+    import numpy as np
+
+    arr = np.asarray(img.convert("RGB"), dtype=np.float32)
+    h, w, _ = arr.shape
+    crop = arr[h // 5 : 4 * h // 5, w // 5 : 4 * w // 5]
+    mean = float(crop.mean())
+    std = float(crop.std())
+    # слишком белый/светящийся или почти плоский
+    if mean > 225 or mean < 40:
+        return False
+    if std < 18:
+        return False
+    return True
+
+
+def cutout_cake_rgba(img: Image.Image) -> Image.Image:
+    """Вырезать торт с серого фона; жёстче к краям, меньше «каши»."""
+    import numpy as np
+
+    rgb = img.convert("RGB")
+    arr = np.asarray(rgb).astype(np.float32)
+    h, w, _ = arr.shape
+    # фон: верхняя полоса + углы (там не должно быть торта)
+    top_band = arr[: max(8, h // 10), :, :].reshape(-1, 3)
+    corners = np.stack([
+        arr[2, 2], arr[2, w - 3], arr[h - 3, 2], arr[h - 3, w - 3],
+    ])
+    bg = np.concatenate([top_band, corners], axis=0).mean(axis=0)
+    dist = np.linalg.norm(arr - bg, axis=2)
+    alpha = np.clip((dist - 22) / 24, 0, 1)
+    alpha = (alpha * 255).astype(np.uint8)
+    a_img = Image.fromarray(alpha, mode="L")
+    a_img = a_img.filter(ImageFilter.MedianFilter(5))
+    a_img = a_img.point(lambda p: 255 if p > 100 else (0 if p < 50 else int((p - 50) * 255 / 50)))
+    a_img = a_img.filter(ImageFilter.GaussianBlur(0.8))
+    out = rgb.convert("RGBA")
+    out.putalpha(a_img)
+    return trim_transparent(out, pad=4)
+
+
+def paste_cake_rgba(
+    bg: Image.Image,
+    cake: Image.Image,
+    framing: Framing | None = None,
+    scale: float = 0.38,
+) -> Image.Image:
+    """Вставить вырезанный AI-торт справа на стол."""
+    framing = framing or FRAMINGS[0]
+    base = bg.convert("RGBA")
+    w, h = base.size
+    cake = cake.convert("RGBA")
+    tw = max(32, int(w * scale))
+    th = int(tw * cake.size[1] / max(1, cake.size[0]))
+    cake = cake.resize((tw, th), Image.LANCZOS)
+    cx = int(w * framing.cake_x)
+    # низ торта на линии стола
+    x = cx - tw // 2
+    y = int(h * 0.64) - th + int(th * 0.08)
+    y = max(0, min(h - th, y))
+
+    # всегда стол под тортом — чтобы не «летал»
+    table = Image.new("RGBA", base.size, (0, 0, 0, 0))
+    td = ImageDraw.Draw(table)
+    wood = (168, 120, 75, 245)
+    wood2 = (140, 95, 55, 245)
+    tx0, ty0 = x - 18, y + th - 18
+    tx1, ty1 = x + tw + 18, y + th + 28
+    td.rounded_rectangle([tx0, ty0, tx1, ty1], radius=6, fill=wood)
+    td.rectangle([tx0 + 10, ty1 - 8, tx0 + 22, min(h - 4, ty1 + 40)], fill=wood2)
+    td.rectangle([tx1 - 22, ty1 - 8, tx1 - 10, min(h - 4, ty1 + 40)], fill=wood2)
+    td.ellipse([tx0 + 6, ty0 - 4, tx1 - 6, ty0 + 16], fill=(245, 240, 230, 230))
+    base = Image.alpha_composite(base, table)
+
+    # тень
+    shadow = Image.new("RGBA", base.size, (0, 0, 0, 0))
+    sd = ImageDraw.Draw(shadow)
+    sd.ellipse(
+        [x + 8, y + th - 14, x + tw - 8, y + th + 8],
+        fill=(0, 0, 0, 75),
+    )
+    shadow = shadow.filter(ImageFilter.GaussianBlur(5))
+    out = Image.alpha_composite(base, shadow)
+    out.paste(cake, (x, y), cake)
+    return out.convert("RGB")
 
 
 def scene_prompt(
@@ -358,33 +520,136 @@ def scene_prompt(
     return base
 
 
-def scrub_left_background(bg: Image.Image, frac: float = 0.45) -> Image.Image:
-    """Стереть левую часть фона — убрать сгенерированных кукол/фигур перед вставкой выреза."""
+def paste_birthday_cake(
+    bg: Image.Image,
+    framing: Framing | None = None,
+    rng: random.Random | None = None,
+) -> Image.Image:
+    """Гарантированно вставить читаемый торт справа на стол — не надеемся на SD."""
+    rng = rng or random
+    framing = framing or FRAMINGS[0]
+    img = bg.convert("RGBA")
+    w, h = img.size
+    cx = int(w * framing.cake_x)
+    base_y = int(h * 0.60)
+
+    frost = rng.choice([
+        (255, 165, 180),
+        (255, 225, 200),
+        (250, 240, 225),
+        (255, 195, 215),
+        (200, 145, 115),
+    ])
+    frost2 = tuple(max(0, c - 28) for c in frost)
+    plate_c = (252, 248, 242)
+    cream = (255, 255, 255)
+
+    cake_h = int(h * 0.24)
+    cake_w = int(w * 0.14)
+    layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    d = ImageDraw.Draw(layer)
+
+    # подставка
+    d.ellipse(
+        [cx - 14, base_y + 8, cx + 14, base_y + 22],
+        fill=(170, 150, 120, 255),
+    )
+    d.rectangle([cx - 6, base_y, cx + 6, base_y + 14], fill=(190, 170, 140, 255))
+    d.ellipse(
+        [cx - cake_w - 16, base_y - 8, cx + cake_w + 16, base_y + 14],
+        fill=(*plate_c, 255),
+    )
+    d.ellipse(
+        [cx - cake_w - 10, base_y - 4, cx + cake_w + 10, base_y + 8],
+        fill=(235, 228, 218, 255),
+    )
+
+    def tier(x0, y0, x1, y1, col, rim=True):
+        shade = tuple(max(0, c - 35) for c in col)
+        light = tuple(min(255, c + 25) for c in col)
+        d.rounded_rectangle([x0, y0, x1, y1], radius=7, fill=(*col, 255))
+        # боковой градиент-намёк
+        mid = (x0 + x1) // 2
+        d.rectangle([x0, y0, mid - 2, y1], fill=(*light, 90))
+        d.rectangle([mid + 2, y0, x1, y1], fill=(*shade, 70))
+        if rim:
+            d.ellipse([x0 + 2, y0 - 6, x1 - 2, y0 + 10], fill=(*cream, 255))
+            d.ellipse([x0 + 6, y0 - 2, x1 - 6, y0 + 8], fill=(*col, 255))
+
+    # нижний ярус
+    y1 = base_y - 2
+    h1 = int(cake_h * 0.46)
+    tier(cx - cake_w, y1 - h1, cx + cake_w, y1, frost)
+    # крем-точки по низу
+    for i in range(7):
+        bx = cx - cake_w + 6 + i * max(9, (2 * cake_w - 12) // 6)
+        d.ellipse([bx - 5, y1 - 10, bx + 5, y1 + 4], fill=(*cream, 255))
+        d.ellipse([bx - 3, y1 - 8, bx + 3, y1], fill=(*frost, 255))
+
+    # верхний ярус
+    mw = int(cake_w * 0.70)
+    y2 = y1 - h1 + 2
+    h2 = int(cake_h * 0.36)
+    tier(cx - mw, y2 - h2, cx + mw, y2 + 2, frost2)
+    for i in range(5):
+        bx = cx - mw + 6 + i * max(8, (2 * mw - 12) // 4)
+        d.ellipse([bx - 4, y2 - 8, bx + 4, y2 + 3], fill=(*cream, 255))
+
+    # верхняя шапка крема
+    top = y2 - h2
+    d.ellipse([cx - mw + 2, top - 8, cx + mw - 2, top + 10], fill=(*cream, 255))
+    d.ellipse([cx - mw + 8, top - 4, cx + mw - 8, top + 8], fill=(*frost2, 255))
+
+    # свечи
+    n_candles = 5
+    for i in range(n_candles):
+        bx = cx - mw + 12 + i * max(9, (2 * mw - 24) // (n_candles - 1))
+        wax = rng.choice([(255, 250, 230), (255, 220, 220), (220, 240, 255)])
+        d.rectangle([bx - 2, top - 30, bx + 2, top + 2], fill=(*wax, 255))
+        # ореол
+        d.ellipse([bx - 8, top - 48, bx + 8, top - 28], fill=(255, 200, 80, 55))
+        d.ellipse([bx - 5, top - 42, bx + 5, top - 28], fill=(255, 140, 30, 255))
+        d.ellipse([bx - 3, top - 46, bx + 3, top - 34], fill=(255, 245, 140, 255))
+
+    shadow = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    sd = ImageDraw.Draw(shadow)
+    sd.ellipse(
+        [cx - cake_w - 6, base_y + 2, cx + cake_w + 6, base_y + 18],
+        fill=(0, 0, 0, 80),
+    )
+    shadow = shadow.filter(ImageFilter.GaussianBlur(5))
+    out = Image.alpha_composite(img, shadow)
+    out = Image.alpha_composite(out, layer)
+    return out.convert("RGB")
+
+def scrub_left_background(bg: Image.Image, frac: float = 0.38) -> Image.Image:
+    """Слегка затереть возможные фигуры слева, сохранив обои/мебель комнаты."""
     img = bg.convert("RGB")
     w, h = img.size
     cut = int(w * frac)
-    wall = img.crop((cut, int(h * 0.15), min(w - 8, cut + 48), int(h * 0.45)))
-    floor = img.crop((cut, int(h * 0.70), min(w - 8, cut + 48), int(h * 0.92)))
-    wall_c = wall.resize((1, 1), Image.BOX).getpixel((0, 0))
-    floor_c = floor.resize((1, 1), Image.BOX).getpixel((0, 0))
-    fy = int(h * 0.62)
-    left = Image.new("RGB", (cut + 24, h), wall_c)
-    ld = ImageDraw.Draw(left)
-    ld.rectangle([0, fy, cut + 24, h], fill=floor_c)
-    left = left.filter(ImageFilter.GaussianBlur(6))
+    y0, y1 = int(h * 0.18), int(h * 0.82)
+    sample = img.crop((cut, y0, min(w - 2, cut + 90), y1))
+    fill = sample.resize((cut + 24, y1 - y0), Image.BILINEAR)
+    fill = fill.filter(ImageFilter.GaussianBlur(8))
+    orig_blur = img.crop((0, y0, cut + 24, y1)).filter(ImageFilter.GaussianBlur(14))
+    fill = Image.blend(fill, orig_blur, 0.55)
+
     out = img.copy()
-    mask = Image.new("L", (cut + 24, h), 255)
+    mask = Image.new("L", (cut + 24, y1 - y0), 0)
     md = ImageDraw.Draw(mask)
-    for i in range(28):
-        md.rectangle([cut + 24 - 28 + i, 0, cut + 24 - 28 + i, h], fill=int(255 * (1 - i / 28)))
-    out.paste(left, (0, 0), mask)
+    md.rectangle([0, 16, cut, y1 - y0 - 16], fill=160)
+    mask = mask.filter(ImageFilter.GaussianBlur(20))
+    out.paste(fill, (0, y0), mask)
     return out
 
 
 NEGATIVE_BG = (
     "person, people, face, human, character, figure, puppet, doll, "
     "lamp, floor lamp, chandelier, light bulb, glowing orb, pole, "
-    "text, watermark, blurry, muddy, horror, ugly, deformed"
+    "solid color background, blank wall, empty void, flat color, abstract, "
+    "melted cake, horror cake, creepy, "
+    "bokeh, out of focus, blurry background, shallow depth of field, "
+    "text, watermark, muddy, horror, ugly, deformed"
 )
 
 
@@ -394,22 +659,28 @@ def make_layout_canvas(
     rng: random.Random | None = None,
     framing: Framing | None = None,
 ) -> Image.Image:
-    """Мягкий цветовой макет: торт справа, пусто слева."""
+    """Макет комнаты: стена/окно/стол/торт справа, пустой пол слева."""
     rng = rng or random.Random(0)
     framing = framing or FRAMINGS[0]
     wall = rng.choice([
-        (92, 110, 140), (110, 95, 80), (70, 100, 90), (100, 85, 105),
-        (85, 95, 115), (120, 100, 85),
+        (168, 150, 130), (145, 155, 165), (160, 140, 125), (150, 145, 155),
+        (175, 160, 140), (140, 150, 145),
     ])
+    wallpaper_a = tuple(max(0, min(255, c + rng.randint(-18, 12))) for c in wall)
+    wallpaper_b = tuple(max(0, min(255, c + rng.randint(-8, 22))) for c in wall)
     curtain = rng.choice([
-        (140, 35, 45), (40, 75, 130), (45, 110, 65), (150, 95, 40),
-        (110, 40, 95), (160, 55, 50),
+        (150, 40, 50), (45, 80, 140), (50, 115, 70), (155, 100, 45),
+        (120, 45, 100), (165, 60, 55),
     ])
     floor = rng.choice([
-        (155, 115, 75), (130, 95, 65), (170, 135, 95), (120, 90, 60),
+        (170, 125, 80), (145, 105, 70), (185, 145, 100), (130, 95, 60),
     ])
-    table = rng.choice([
-        (190, 145, 100), (170, 125, 85), (200, 165, 120),
+    wood = rng.choice([
+        (150, 100, 60), (130, 85, 50), (165, 115, 75), (120, 80, 45),
+    ])
+    tablecloth = rng.choice([
+        (245, 235, 220), (220, 60, 70), (240, 240, 245), (90, 130, 90),
+        (255, 220, 180), (200, 50, 60),
     ])
     frosting = rng.choice([
         (255, 175, 175), (255, 230, 200), (230, 200, 170), (255, 210, 230),
@@ -419,74 +690,164 @@ def make_layout_canvas(
     canvas = Image.new("RGB", (size, size), wall)
     draw = ImageDraw.Draw(canvas)
 
-    ceil = tuple(max(0, c - 25) for c in wall)
-    draw.rectangle([0, 0, size, int(size * 0.18)], fill=ceil)
+    # потолок
+    ceil = tuple(max(0, c - 30) for c in wall)
+    ceil_y = int(size * 0.14)
+    draw.rectangle([0, 0, size, ceil_y], fill=ceil)
 
-    ch = int(size * rng.uniform(0.28, 0.40))
-    for x in range(0, size, max(10, size // 18)):
-        shade = tuple(max(0, min(255, c + rng.randint(-15, 15))) for c in curtain)
-        draw.rectangle([x, 0, x + size // 20, ch], fill=shade)
+    # обои / полосы на стене (даёт модели «комнату», а не плакат)
+    pattern = rng.choice(["stripes", "dots", "blocks"])
+    if pattern == "stripes":
+        step = max(10, size // 22)
+        for x in range(0, size, step):
+            col = wallpaper_a if (x // step) % 2 == 0 else wallpaper_b
+            draw.rectangle([x, ceil_y, x + step // 2, int(size * 0.62)], fill=col)
+    elif pattern == "dots":
+        for _ in range(80):
+            x = rng.randint(0, size)
+            y = rng.randint(ceil_y, int(size * 0.58))
+            r = rng.randint(3, 8)
+            draw.ellipse([x, y, x + r, y + r], fill=wallpaper_b)
+    else:
+        cell = max(18, size // 16)
+        for y in range(ceil_y, int(size * 0.62), cell):
+            for x in range(0, size, cell):
+                if (x // cell + y // cell) % 2 == 0:
+                    draw.rectangle([x, y, x + cell - 2, y + cell - 2], fill=wallpaper_a)
 
-    fy = int(size * 0.62)
+    # окно справа за столом
+    wx0 = int(size * rng.uniform(0.58, 0.66))
+    wy0 = int(size * 0.18)
+    ww, wh = int(size * 0.28), int(size * 0.32)
+    sky = rng.choice([(190, 215, 240), (255, 230, 180), (170, 200, 230)])
+    draw.rectangle([wx0, wy0, wx0 + ww, wy0 + wh], fill=sky)
+    draw.line([wx0 + ww // 2, wy0, wx0 + ww // 2, wy0 + wh], fill=(220, 220, 230), width=3)
+    draw.line([wx0, wy0 + wh // 2, wx0 + ww, wy0 + wh // 2], fill=(220, 220, 230), width=3)
+    # рама
+    frame = tuple(max(0, c - 40) for c in wood)
+    draw.rectangle([wx0 - 4, wy0 - 4, wx0 + ww + 4, wy0 + wh + 4], outline=frame, width=5)
+
+    # шторы по бокам окна (не на всю ширину — иначе снова «полосы»)
+    ch = int(size * rng.uniform(0.42, 0.52))
+    for side, x0 in (("L", wx0 - int(size * 0.08)), ("R", wx0 + ww - 4)):
+        for i in range(5):
+            shade = tuple(max(0, min(255, c + rng.randint(-20, 15))) for c in curtain)
+            draw.rectangle(
+                [x0 + i * 7, ceil_y, x0 + i * 7 + 10, ch],
+                fill=shade,
+            )
+
+    # пол + доски
+    fy = int(size * 0.60)
     draw.rectangle([0, fy, size, size], fill=floor)
-    for i in range(6):
-        y = fy + int((size - fy) * (i / 6))
-        line = tuple(max(0, c - 18) for c in floor)
-        draw.line([(0, y), (size, y)], fill=line, width=2)
+    plank = max(14, size // 18)
+    for i, x in enumerate(range(0, size, plank)):
+        shade = tuple(max(0, min(255, c + (-12 if i % 2 else 8))) for c in floor)
+        draw.rectangle([x, fy, x + plank - 1, size], fill=shade)
+        draw.line([(x, fy), (x, size)], fill=tuple(max(0, c - 25) for c in floor), width=1)
+    # плинтус
+    draw.rectangle([0, fy - 6, size, fy + 2], fill=tuple(max(0, c - 35) for c in wood))
 
-    tx = int(size * rng.uniform(0.55, 0.68))
-    ty = int(size * rng.uniform(0.58, 0.64))
-    tw = int(size * rng.uniform(0.38, 0.48))
-    th = int(size * rng.uniform(0.12, 0.16))
-    draw.ellipse([tx, ty, tx + tw, ty + th], fill=table)
+    # коврик слева-центр (пустое место под персонажа, но не голый пол)
+    rug = rng.choice([(160, 50, 55), (50, 90, 140), (60, 120, 80), (180, 140, 70)])
+    draw.ellipse(
+        [int(size * 0.05), int(size * 0.78), int(size * 0.48), int(size * 0.98)],
+        fill=rug,
+    )
 
-    balloon_n = rng.randint(5, 14)
+    # стол справа с ножками
+    tx = int(size * (framing.cake_x - 0.18))
+    ty = int(size * 0.58)
+    tw = int(size * rng.uniform(0.40, 0.50))
+    th = int(size * 0.06)
+    # ножки
+    leg_c = tuple(max(0, c - 25) for c in wood)
+    for lx in (tx + int(tw * 0.12), tx + int(tw * 0.78)):
+        draw.rectangle([lx, ty + th, lx + int(size * 0.035), int(size * 0.88)], fill=leg_c)
+    # столешница
+    draw.rounded_rectangle([tx, ty, tx + tw, ty + th], radius=6, fill=wood)
+    # скатерть
+    draw.ellipse(
+        [tx + 8, ty - 4, tx + tw - 8, ty + th + 10],
+        fill=tablecloth,
+    )
+
+    # картинная рама / полка на стене слева-центр (наполнение, не фигура)
+    if rng.random() < 0.7:
+        fx0 = int(size * rng.uniform(0.08, 0.22))
+        fy0 = int(size * rng.uniform(0.22, 0.32))
+        fw, fh = int(size * 0.14), int(size * 0.12)
+        draw.rectangle([fx0, fy0, fx0 + fw, fy0 + fh], outline=frame, width=4)
+        draw.rectangle(
+            [fx0 + 6, fy0 + 6, fx0 + fw - 6, fy0 + fh - 6],
+            fill=rng.choice([(90, 120, 150), (160, 100, 80), (100, 140, 100)]),
+        )
+
+    # стул у стола (силуэт мебели)
+    if rng.random() < 0.65:
+        sx = tx - int(size * 0.06)
+        sy = ty + int(size * 0.02)
+        draw.rectangle([sx, sy, sx + int(size * 0.08), sy + int(size * 0.04)], fill=wood)
+        draw.rectangle(
+            [sx + 4, sy + int(size * 0.04), sx + 12, int(size * 0.86)],
+            fill=leg_c,
+        )
+        draw.rectangle(
+            [sx + int(size * 0.06), sy - int(size * 0.12), sx + int(size * 0.08), sy + 4],
+            fill=wood,
+        )
+
+    # гирлянда / флажки
+    for i in range(8):
+        x = int(size * (0.35 + i * 0.07))
+        y = int(size * 0.16) + (i % 2) * 10
+        flag = rng.choice([
+            (255, 90, 130), (80, 200, 255), (255, 220, 60),
+            (120, 255, 140), (255, 150, 60),
+        ])
+        draw.polygon([(x, y), (x + 14, y), (x + 7, y + 18)], fill=flag)
+
+    balloon_n = rng.randint(6, 12)
     if framing.id == "party_balloons":
-        balloon_n = rng.randint(12, 20)
+        balloon_n = rng.randint(12, 18)
     for _ in range(balloon_n):
-        x = rng.randint(int(size * 0.35), size - 35)
-        y = rng.randint(8, max(20, ch - 10))
-        r = rng.randint(16, 34)
+        x = rng.randint(int(size * 0.40), size - 40)
+        y = rng.randint(int(size * 0.08), int(size * 0.28))
+        r = rng.randint(14, 28)
         col = rng.choice([
             (255, 90, 130), (80, 200, 255), (255, 220, 60),
             (120, 255, 140), (255, 150, 60), (200, 120, 255),
         ])
-        draw.ellipse([x, y, x + r, y + r], fill=col)
+        draw.ellipse([x, y, x + r, y + int(r * 1.15)], fill=col)
+        draw.line([x + r // 2, y + int(r * 1.15), x + r // 2, y + r + 30], fill=(80, 80, 80), width=1)
 
+    # торт на столе справа — одна узнаваемая форма (2 яруса + свечи)
     cx = int(size * framing.cake_x)
-    cy = int(size * 0.70)
-    if theme in ("cake", "family") or (theme == "party" and rng.random() < 0.7):
-        cw = int(size * rng.uniform(0.12, 0.16))
-        ch_cake = int(size * rng.uniform(0.16, 0.22))
-        draw.ellipse([cx - cw - 10, cy - 6, cx + cw + 10, cy + 28], fill=(250, 240, 220))
-        draw.rectangle([cx - cw, cy - ch_cake, cx + cw, cy], fill=frosting)
-        mw = int(cw * 0.78)
-        mh = int(ch_cake * 0.45)
-        mid = tuple(max(0, c - 20) for c in frosting)
-        draw.rectangle([cx - mw, cy - ch_cake - mh, cx + mw, cy - ch_cake + 4], fill=mid)
-        top = tuple(max(0, c - 35) for c in frosting)
-        draw.ellipse(
-            [cx - mw, cy - ch_cake - mh - 16, cx + mw, cy - ch_cake - mh + 10],
-            fill=top,
-        )
-        for i in range(5):
-            bx = cx - mw + 10 + i * max(12, (2 * mw - 16) // 4)
-            draw.rectangle(
-                [bx - 2, cy - ch_cake - mh - 42, bx + 2, cy - ch_cake - mh - 8],
-                fill=(255, 245, 210),
-            )
-            draw.ellipse(
-                [bx - 6, cy - ch_cake - mh - 54, bx + 6, cy - ch_cake - mh - 40],
-                fill=(255, 170, 50),
-            )
-    else:
-        for _ in range(3):
-            gx = rng.randint(tx + 10, tx + tw - 40)
-            gy = rng.randint(ty - 30, ty - 5)
-            draw.rectangle(
-                [gx, gy, gx + 36, gy + 28],
-                fill=rng.choice([(200, 60, 60), (60, 140, 200), (220, 180, 60)]),
-            )
+    cy = ty - 2
+    frost = rng.choice([
+        (255, 150, 170), (255, 220, 160), (245, 235, 220),
+        (200, 140, 100), (255, 200, 210),
+    ])
+    frost2 = tuple(max(40, c - 25) for c in frost)
+    cw = int(size * 0.17)
+    ch_cake = int(size * 0.26)
+    plate = (252, 248, 240)
+    draw.ellipse([cx - cw - 14, cy - 4, cx + cw + 14, cy + 16], fill=plate)
+    draw.rounded_rectangle([cx - cw, cy - int(ch_cake * 0.5), cx + cw, cy], radius=6, fill=frost)
+    mw = int(cw * 0.72)
+    draw.rounded_rectangle(
+        [cx - mw, cy - int(ch_cake * 0.85), cx + mw, cy - int(ch_cake * 0.45)],
+        radius=5,
+        fill=frost2,
+    )
+    top = cy - int(ch_cake * 0.85)
+    draw.ellipse([cx - mw, top - 8, cx + mw, top + 8], fill=(255, 255, 255))
+    for i in range(5):
+        bx = cx - mw + 8 + i * max(9, (2 * mw - 16) // 4)
+        draw.rectangle([bx - 2, top - 32, bx + 2, top + 2], fill=(255, 248, 220))
+        draw.ellipse([bx - 5, top - 44, bx + 5, top - 30], fill=(255, 150, 40))
+        draw.ellipse([bx - 3, top - 48, bx + 3, top - 36], fill=(255, 240, 120))
 
-    canvas = canvas.filter(ImageFilter.GaussianBlur(radius=max(8, size // 40)))
+    # слабый блюр: комната и торт должны читаться
+    canvas = canvas.filter(ImageFilter.GaussianBlur(radius=max(2, size // 128)))
     return canvas

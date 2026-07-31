@@ -3,6 +3,7 @@ import queue
 import threading
 import time
 from collections import deque
+from pathlib import Path
 from typing import Deque, Optional, Tuple
 
 import numpy as np
@@ -30,8 +31,9 @@ def start_countdown(seconds: int) -> None:
 
 
 def main() -> None:
+    old_kws = Path(__file__).resolve().parent
     parser = argparse.ArgumentParser(description="Real-time KWS test script.")
-    parser.add_argument("--model", default="models/kws_cnn.pt")
+    parser.add_argument("--model", default=str(old_kws / "models" / "kws_cnn.pt"))
     parser.add_argument("--threshold", type=float, default=0.9)
     parser.add_argument("--threshold-four", type=float, default=None)
     parser.add_argument("--threshold-five", type=float, default=None)
@@ -45,7 +47,7 @@ def main() -> None:
     parser.add_argument("--blocksize", type=int, default=0)
     parser.add_argument("--latency", default="high")
     parser.add_argument("--log-probs", action="store_true")
-    parser.add_argument("--save-trigger", default="trigger.wav")
+    parser.add_argument("--save-trigger", default=str(old_kws / "trigger.wav"))
     parser.add_argument("--min-rms", type=float, default=0.005)
     parser.add_argument("--buffer-sec", type=float, default=1.0)
     parser.add_argument("--hop-sec", type=float, default=0.25)

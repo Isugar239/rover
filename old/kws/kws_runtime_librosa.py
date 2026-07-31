@@ -3,6 +3,7 @@ import queue
 import threading
 import time
 from collections import deque
+from pathlib import Path
 from typing import Deque, Optional
 
 import librosa
@@ -40,8 +41,9 @@ def start_timer(seconds: int, fire: bool) -> threading.Event:
 
 
 def main() -> None:
+    old_kws = Path(__file__).resolve().parent
     parser = argparse.ArgumentParser(description="KWS runtime (librosa MFCC).")
-    parser.add_argument("--model", default="models/kws_librosa_unknown.pt")
+    parser.add_argument("--model", default=str(old_kws / "models" / "kws_librosa_unknown.pt"))
     parser.add_argument("--device", type=int, default=None)
     parser.add_argument("--threshold", type=float, default=0.68)
     parser.add_argument("--consec-hits", type=int, default=2)

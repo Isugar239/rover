@@ -46,12 +46,21 @@ GREETINGS = [
 
 
 class BackgroundEngine:
-    def __init__(self, backend: str = "auto", size: int = 768, steps: int = 60, strength: float = 0.74):
+    def __init__(
+        self,
+        backend: str = "auto",
+        size: int = 768,
+        steps: int = 60,
+        strength: float = 0.74,
+        device: str = "auto",
+    ):
         self.size = size
         self.steps = steps
         self.strength = strength
         self.pipe = None
+        self._txt2img = None
         self.backend = backend
+        self.device_pref = device  # auto | cuda | cpu
         self.device = "cpu"
         self.dtype = torch.float32
         self.use_lcm = False
@@ -59,17 +68,30 @@ class BackgroundEngine:
     def _pick_backend(self) -> str:
         if self.backend != "auto":
             return self.backend
-        if torch.cuda.is_available():
-            vram = torch.cuda.get_device_properties(0).total_memory
-            if vram >= 5.5 * (1024**3) and os.path.isdir(SDXL_DIR):
-                return "sdxl"
-            return "sd15"
+        # SDXL на 4GB + KWS не уживётся; на CPU — очень долго. auto → sd15.
+        if (
+            self.device_pref != "cpu"
+            and torch.cuda.is_available()
+            and torch.cuda.get_device_properties(0).total_memory >= 5.5 * (1024**3)
+            and os.path.isdir(SDXL_DIR)
+        ):
+            return "sdxl"
         return "sd15"
+
+    def _resolve_device(self) -> str:
+        if self.device_pref == "cpu":
+            return "cpu"
+        if self.device_pref == "cuda":
+            if not torch.cuda.is_available():
+                print("[!] CUDA недоступна, падаем на CPU")
+                return "cpu"
+            return "cuda"
+        return "cuda" if torch.cuda.is_available() else "cpu"
 
     def load(self):
         backend = self._pick_backend()
         self.backend = backend
-        use_cuda = torch.cuda.is_available()
+        use_cuda = self._resolve_device() == "cuda"
         self.device = "cuda" if use_cuda else "cpu"
         self.dtype = torch.float16 if use_cuda else torch.float32
         print(f"[*] backend={backend} device={self.device}")
@@ -77,13 +99,14 @@ class BackgroundEngine:
         if backend == "sdxl":
             from diffusers import StableDiffusionXLImg2ImgPipeline, DPMSolverMultistepScheduler
 
-            self.pipe = StableDiffusionXLImg2ImgPipeline.from_pretrained(
-                SDXL_DIR,
+            kw = dict(
                 torch_dtype=self.dtype,
-                variant="fp16",
                 use_safetensors=True,
                 local_files_only=True,
             )
+            if use_cuda:
+                kw["variant"] = "fp16"
+            self.pipe = StableDiffusionXLImg2ImgPipeline.from_pretrained(SDXL_DIR, **kw)
             self.pipe.scheduler = DPMSolverMultistepScheduler.from_config(
                 self.pipe.scheduler.config
             )
@@ -104,7 +127,7 @@ class BackgroundEngine:
                 self.pipe.scheduler.config
             )
             self.steps = max(self.steps, 60)
-            self.guidance = 8.0
+            self.guidance = 8.5
             self.use_lcm = False
             self.size = min(self.size, 512)
 
@@ -123,6 +146,8 @@ class BackgroundEngine:
                 self.pipe.enable_attention_slicing()
             except Exception:
                 pass
+            # на CPU чуть меньше шагов по умолчанию, если юзер не задал явно
+            print("[*] CPU-режим: GPU свободна для KWS")
         print("[+] модель готова")
 
     @torch.inference_mode()
@@ -134,16 +159,18 @@ class BackgroundEngine:
         framing=None,
     ) -> Image.Image:
         assert self.pipe is not None
-        from compose_lib import make_layout_canvas
+        from compose_lib import FRAMINGS, make_layout_canvas
+        from PIL import ImageFilter, ImageEnhance
 
+        framing = framing or FRAMINGS[0]
         rng = random.Random(seed)
         gen = torch.Generator(device="cpu").manual_seed(seed)
         layout = make_layout_canvas(self.size, theme, rng, framing=framing)
-        strength = self.strength + rng.uniform(-0.015, 0.015)
-        strength = max(0.72, min(0.78, strength))
+        strength = self.strength + rng.uniform(-0.01, 0.01)
+        strength = max(0.58, min(0.66, strength))
         steps = self.steps
         t0 = time.time()
-        kw = dict(
+        image = self.pipe(
             prompt=prompt,
             negative_prompt=NEGATIVE_BG,
             image=layout,
@@ -151,9 +178,7 @@ class BackgroundEngine:
             num_inference_steps=steps,
             guidance_scale=getattr(self, "guidance", 7.5),
             generator=gen,
-        )
-        image = self.pipe(**kw).images[0]
-        from PIL import ImageFilter, ImageEnhance
+        ).images[0]
 
         image = image.filter(ImageFilter.UnsharpMask(radius=1.5, percent=140, threshold=2))
         image = ImageEnhance.Contrast(image).enhance(1.1)
@@ -174,8 +199,14 @@ def parse_args():
     p.add_argument("--seed", type=int, default=None)
     p.add_argument("--size", type=int, default=768)
     p.add_argument("--steps", type=int, default=60)
-    p.add_argument("--strength", type=float, default=0.74)
+    p.add_argument("--strength", type=float, default=0.62)
     p.add_argument("--backend", choices=["auto", "sd15", "sd15_lcm", "sdxl"], default="auto")
+    p.add_argument(
+        "--device",
+        choices=["auto", "cuda", "cpu"],
+        default="auto",
+        help="cpu — GPU свободна для KWS (медленнее); cuda — генерация на видеокарте",
+    )
     p.add_argument("--output", default=None)
     p.add_argument("--save-bg", action="store_true")
     p.add_argument("--no-text", action="store_true")
@@ -253,7 +284,11 @@ def main():
     engine = None
     if not args.bg:
         engine = BackgroundEngine(
-            backend=args.backend, size=args.size, steps=args.steps, strength=args.strength
+            backend=args.backend,
+            size=args.size,
+            steps=args.steps,
+            strength=args.strength,
+            device=args.device,
         )
         print("[*] загрузка модели...")
         t0 = time.time()

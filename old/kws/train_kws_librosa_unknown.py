@@ -222,9 +222,10 @@ def train(
 
 
 def main() -> None:
+    old_kws = Path(__file__).resolve().parent
     parser = argparse.ArgumentParser(description="Train KWS model with unknown class (librosa MFCC).")
-    parser.add_argument("--data-root", default="data", help="Dataset root directory.")
-    parser.add_argument("--output", default="models/kws_librosa_unknown.pt", help="Output path.")
+    parser.add_argument("--data-root", default=str(old_kws.parent.parent / "data"), help="Dataset root directory.")
+    parser.add_argument("--output", default=str(old_kws / "models" / "kws_librosa_unknown.pt"), help="Output path.")
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--lr", type=float, default=1e-3)

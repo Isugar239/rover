@@ -3,6 +3,7 @@ import queue
 import threading
 import time
 from collections import deque
+from pathlib import Path
 from typing import Deque, Optional
 
 import numpy as np
@@ -221,8 +222,9 @@ class KWSApp:
 
 
 def main() -> None:
+    old_kws = Path(__file__).resolve().parent
     parser = argparse.ArgumentParser(description="KWS GUI")
-    parser.add_argument("--model", default="models/kws_five_only.pt")
+    parser.add_argument("--model", default=str(old_kws / "models" / "kws_five_only.pt"))
     args = parser.parse_args()
 
     root = tk.Tk()

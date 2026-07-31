@@ -25,4 +25,5 @@ assets/poses/classic_ref.png
 *.ckpt
 *.bin
 *.pt
-!models/kws_*.pt
+!kws/models/kws_*.pt
+!old/kws/models/kws_*.pt
